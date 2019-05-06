@@ -394,7 +394,7 @@ async def process_command(msg_content, message):
     if matches_command(msg_content, "help"):
         response = "Available Commands:\n" \
                    "```\n" \
-                   "help, restart, reset, save, load, op, deop, ban, unban, param_reset," \
+                   "help, restart, reset, save, load, op, deop, ban, unban, param_reset, " \
                    "max_input_length, max_length, beam_width, temperature, relevance, topn\n" \
                    "```"
 

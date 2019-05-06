@@ -404,7 +404,7 @@ async def process_command(msg_content, message):
             print("[Restarting...]")
             response = "System: Restarting..."
             await send_message(message, response)
-            client.close()
+            await client.close()
             exit()
         else:
             result = 5

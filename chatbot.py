@@ -96,15 +96,19 @@ def libchatbot(save_dir='models/reddit', max_length=500, beam_width=2,
     }
 
     async def consumer(text, args=args, states=None, net=net, vocab=vocab, max_length=max_length,
-            relevance=relevance, temperature=temperature, beam_width=beam_width, topn=topn, function=None, function_args=None, function_run_every=20, print_response=True):
+            relevance=None, temperature=None, beam_width=None, topn=None, function=None, function_args=None, function_run_every=15, print_response=True):
         user_input = text
         if states == None:
             states = args['states']
         session = args['session']
-        relevance = args['relevance']
-        temperature = args['temperature']
-        topn = args['topn']
-        beam_width = args['beam_width']
+        if relevance == None:
+            relevance = args['relevance']
+        if temperature == None:
+            temperature = args['temperature']
+        if topn == None:
+            topn = args['topn']
+        if beam_width == None:
+            beam_width = args['beam_width']
 
         # Fix relevance when states aren't prepped
         if relevance <= 0. and len(states) == 2:
@@ -160,6 +164,7 @@ def libchatbot(save_dir='models/reddit', max_length=500, beam_width=2,
     def load_states(name, args=args):
         with open(name + '.pkl', 'rb') as f:
             args['states'] = pickle.load(f)
+            return args['states']
 
     def get_states(name, args=args):
         with open(name + '.pkl', 'rb') as f:
@@ -173,7 +178,7 @@ def libchatbot(save_dir='models/reddit', max_length=500, beam_width=2,
         args['states'] = states
         return states
 
-    def change_settings(setting, new_value, args=args):
+    def change_settings(setting, new_value, args=args): # Depricated, just use the arguments on consumer
         if setting.startswith('temperature'):
             args['temperature'] = max(0.001, float(new_value))
             return ("[Temperature set to {}]".format(args['temperature']))

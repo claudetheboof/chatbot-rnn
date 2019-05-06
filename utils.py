@@ -103,7 +103,7 @@ class TextLoader():
 
     def _preprocess(self, input_file, tensor_file):
         if input_file.endswith(".bz2"): file_reference = bz2.open(input_file, mode='rt')
-        elif input_file.endswith(".txt"): file_reference = io.open(input_file, mode='rt')
+        elif input_file.endswith(".txt"): file_reference = io.open(input_file, mode='rt', encoding='utf-8')
         data = file_reference.read()
         file_reference.close()
         # Convert the entirety of the data file from characters to indices via the vocab dictionary.

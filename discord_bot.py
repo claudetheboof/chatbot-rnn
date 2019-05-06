@@ -3,6 +3,7 @@ import discord
 import os
 import json
 import copy
+from unidecode import unidecode
 
 try: # Unicode patch for Windows
     import win_unicode_console
@@ -21,14 +22,17 @@ autoload = True
 
 model = "reddit"
 save_dir = "models/" + model
-max_length = 150
-relevance = 0.1
-temperature = 1.2
-topn = 10
+max_length = 125
+relevance = -1
+temperature = 1.0
+topn = -1
 
 states_main = "states" + "_" + model
+
 states_folder = states_main + "/" + "server_states"
 states_folder_dm = states_main + "/" + "dm_states"
+
+states_saves = states_main + "/" + "saves"
 
 user_settings_folder = "user_settings"
 ult_operators_file = user_settings_folder + "/" + "ult_operators.cfg"
@@ -37,7 +41,7 @@ banned_users_file = user_settings_folder + "/" + "banned_users.cfg"
 
 processing_users = []
 
-max_input_length = 1500
+max_input_length = 1000
 
 mention_in_message = True
 mention_message_separator = " - "
@@ -94,6 +98,9 @@ def make_folders():
     if not os.path.exists(user_settings_folder):
         os.makedirs(user_settings_folder)
 
+    if not os.path.exists(states_saves):
+        os.makedirs(states_saves)
+
 def get_states_file(states_id, custom_name="default"):
     if states_id.endswith("p"):
         states_file = states_folder_dm + "/" + states_id
@@ -124,10 +131,10 @@ def add_states_to_queue(states_id, states_diffs):
     states_queue.update({states_id:states_diffs})
 
 def get_states_id(message):
-    if message.server == None or message.channel.is_private:
-        return message.channel.id + "p"
+    if message.guild == None or isinstance(message.channel, discord.abc.PrivateChannel):
+        return str(message.channel.id) + "p"
     else:
-        return message.server.id + "s"
+        return str(message.guild.id) + "s"
 
 def write_state_queue():
     for states_id in states_queue:
@@ -165,7 +172,7 @@ def get_states_size(states):
 
 def is_discord_id(user_id):
     # Quick general check to see if it matches the ID formatting
-    return user_id.isdigit and len(user_id) == 18
+    return (isinstance(user_id, int) or user_id.isdigit) and len(str(user_id)) == 18
 
 def remove_invalid_ids(id_list):
     for user in id_list:
@@ -253,18 +260,18 @@ def remove_command(content):
     try:
         content = content[content.index(" ") + 1:]
     except (ValueError):
-        pass
+        content = ""
     
     return content
 
 def user_id_cleanup(uid):
-    return uid.replace("<@", "").replace("!", "").replace(">", "");
+    return uid.replace("<@", "").replace("!", "").replace(">", "")
 
 def get_args(content):
-    return split_args(remove_command(content));
+    return split_args(remove_command(content))
 
 def split_args(full_args):
-    return full_args.split(" ");
+    return [] if full_args == "" else full_args.split(" ")
 
 def get_user_perms(message):
     load_ops_bans()
@@ -273,13 +280,13 @@ def get_user_perms(message):
         "banned": message.author.id in banned_users,
         "op": message.author.id in operators,
         "ult_op": message.author.id in ult_operators,
-        "server_admin": message.server == None or message.author.server_permissions.administrator,
-        "private": message.channel.is_private,
+        "server_admin": message.guild == None or message.author.guild_permissions.administrator,
+        "private": isinstance(message.channel, discord.abc.PrivateChannel),
     }
     
     return user_perms
 
-async def process_command(msg_content, message):
+def process_response(response, result):
     # 0 = OK
     # 1 = Generic error in arguments
     # 2 = Too many arguments
@@ -288,6 +295,59 @@ async def process_command(msg_content, message):
     # 5 = No permissions error
     # 6 = User not found error
     # 7 = Command not found error
+
+    error_code_print = False
+    
+    if result == 0:
+        if response == "":
+            response = "Command successful"
+        
+        response = "System: " + response
+    elif result == 1:
+        if response == "":
+            response = "Invalid argument(s)"
+        
+        response = "Error: " + response
+    elif result == 2:
+        if response == "":
+            response = "Too many arguments"
+        
+        response = "Error: " + response
+    elif result == 3:
+        if response == "":
+            response = "Not enough arguments"
+        
+        response = "Error: " + response
+    elif result == 4:
+        if response == "":
+            response = "Generic error"
+            error_code_print = True
+        
+        response = "Error: " + response
+    elif result == 5:
+        if response == "":
+            response = "Insufficient permissions"
+        
+        response = "Error: " + response
+    elif result == 6:
+        if response == "":
+            response = "User not found"
+        
+        response = "Error: " + response
+    elif result == 7:
+        if response == "":
+            response = "Command not found"
+        
+        response = "Error: " + response
+
+    if error_code_print:
+        response += " (Error Code " + str(result) + ")"
+
+    return response
+    
+
+async def process_command(msg_content, message):
+    global autosave, autoload
     
     result = 0
     
@@ -331,7 +391,9 @@ async def process_command(msg_content, message):
                 if (input_text.endswith(".pkl")):
                     input_text = input_text[:len(input_text) - len(".pkl")]
                 
-                lib_save_states(input_text)
+                make_folders()
+                
+                lib_save_states(states_saves + "/" + input_text)
                 print()
                 print("[Saved states to \"{}.pkl\"]".format(input_text))
                 response = "Saved model state to \"{}.pkl\"".format(input_text)
@@ -350,14 +412,16 @@ async def process_command(msg_content, message):
                 if (input_text.endswith(".pkl")):
                     input_text = input_text[:len(input_text) - len(".pkl")]
                 
-                loaded_states = lib_load_states(input_text)
+                make_folders()
+                
+                loaded_states = lib_load_states(states_saves + "/" + input_text)
 
                 if not basic_load:
                     save_states(get_states_id(message), states=loaded_states)
                 
                 print()
-                print("[Loaded saved states from \"{}.pkl\"" + (" (basic)" if basic_load else "") + "]".format(input_text))
-                response = "Loaded saved model state from \"{}.pkl\"" + (" (basic)" if basic_reset else "").format(input_text)
+                print(("[Loaded saved states from \"{}.pkl\"" + (" (basic)" if basic_load else "") + "]").format(input_text))
+                response = ("Loaded saved model state from \"{}.pkl\"" + (" (basic)" if basic_load else "")).format(input_text)
             else:
                 result = 3
         else:
@@ -427,262 +491,252 @@ async def process_command(msg_content, message):
 
     elif matches_command(msg_content, "op"):
         if user_perms["ult_op"]:
-            # Replacements are to support mentioned users
-            input_text = user_id_cleanup(remove_command(msg_content))
-            user_exists = True
-            
-            # Check if user actually exists
-            try:
-                await client.get_user_info(input_text)
-            except discord.NotFound:
-                user_exists = False
-            except discord.HTTPException:
-                user_exists = False
+            if len(cmd_args) >= 1:
+                # Replacements are to support mentioned users
+                input_text = user_id_cleanup(remove_command(msg_content))
+                user_exists = True
+                
+                # Check if user actually exists
+                try:
+                    await client.fetch_user(input_text)
+                except discord.NotFound:
+                    user_exists = False
+                except discord.HTTPException:
+                    user_exists = False
 
-            if not input_text == message.author.id:
-                if not input_text in ult_operators and user_exists and not input_text == client.user.id:
-                    if not input_text in operators:
-                        if not input_text in banned_users:
-                            load_ops_bans()
-                            operators.append(input_text)
-                            save_ops_bans()
-                            print()
-                            print("[Opped \"{}\"]".format(input_text))
-                            response = "Opped \"{}\".".format(input_text)
+                if not input_text == str(message.author.id):
+                    if user_exists:
+                        if not int(input_text) in ult_operators and not int(input_text) == client.user.id:
+                            if not int(input_text) in operators:
+                                if not int(input_text) in banned_users:
+                                    load_ops_bans()
+                                    operators.append(int(input_text))
+                                    save_ops_bans()
+                                    print()
+                                    print("[Opped \"{}\"]".format(input_text))
+                                    response = "Opped \"{}\".".format(input_text)
+                                else:
+                                    response = "Unable to op user \"{}\", they're banned".format(input_text)
+                                    result = 4
+                            else:
+                                response = "Unable to op user \"{}\", they're already OP".format(input_text)
+                                result = 4
                         else:
-                            response = "Unable to op user \"{}\", they're banned".format(input_text)
-                            result = 4
+                            response = "Unable to op user \"{}\", you do not have permission to do so".format(input_text)
+                            result = 3
                     else:
-                        response = "Unable to op user \"{}\", they're already OP".format(input_text)
-                        result = 4
+                        response = "Unable to op user \"{}\", they don't exist".format(input_text)
+                        result = 6
                 else:
-                    response = "Unable to op user \"{}\", either they don't exist or you don't have permission to do so".format(input_text)
-                    result = 6
+                    response = "Unable to op user \"{}\", __that's yourself__...".format(input_text)
+                    result = 4
             else:
-                response = "Unable to op user \"{}\", __that's yourself__...".format(input_text)
-                result = 4
+                result = 3
         else:
             result = 5
 
     elif matches_command(msg_content, "deop"):
         if user_perms["ult_op"]:
-            # Replacements are to support mentioned users
-            input_text = user_id_cleanup(remove_command(msg_content))
-            user_exists = True
-            
-            # Check if user actually exists
-            try:
-                await client.get_user_info(input_text)
-            except discord.NotFound:
-                user_exists = False
-            except discord.HTTPException:
-                user_exists = False
+            if len(cmd_args) >= 1:
+                # Replacements are to support mentioned users
+                input_text = user_id_cleanup(remove_command(msg_content))
+                user_exists = True
+                
+                # Check if user actually exists
+                try:
+                    await client.fetch_user(input_text)
+                except discord.NotFound:
+                    user_exists = False
+                except discord.HTTPException:
+                    user_exists = False
 
-            if not input_text == message.author.id:
-                if not input_text in ult_operators and user_exists and not input_text == client.user.id:
-                    if input_text in operators:
-                        load_ops_bans()
-                        if input_text in operators:
-                            operators.remove(input_text)
-                        save_ops_bans()
-                        print()
-                        print("[De-opped \"{}\"]".format(input_text))
-                        response = "De-opped \"{}\".".format(input_text)
+                if not input_text == str(message.author.id):
+                    if user_exists:
+                        if not int(input_text) in ult_operators and not int(input_text) == client.user.id:
+                            if int(input_text) in operators:
+                                load_ops_bans()
+                                if int(input_text) in operators:
+                                    operators.remove(int(input_text))
+                                save_ops_bans()
+                                print()
+                                print("[De-opped \"{}\"]".format(input_text))
+                                response = "De-opped \"{}\".".format(input_text)
+                            else:
+                                response = "Unable to de-op user \"{}\", they're not OP".format(input_text)
+                                result = 4
+                        else:
+                            response = "Unable to de-op user \"{}\", you do not have permission to do so".format(input_text)
+                            result = 3
                     else:
-                        response = "Unable to de-op user \"{}\", they're not OP".format(input_text)
-                        result = 4
+                        response = "Unable to de-op user \"{}\", they don't exist".format(input_text)
+                        result = 6
                 else:
-                    response = "Unable to de-op user \"{}\", either they don't exist or you don't have permission to do so".format(input_text)
-                    result = 6
+                    response = "Unable to de-op user \"{}\", __that's yourself__...".format(input_text)
+                    result = 4
             else:
-                response = "Unable to de-op user \"{}\", __that's yourself__...".format(input_text)
-                result = 4
+                result = 3
         else:
             result = 5
 
     elif matches_command(msg_content, "ban"):
         if user_perms["op"]:
-            # Replacements are to support mentioned users
-            input_text = user_id_cleanup(remove_command(msg_content))
-            user_exists = True
-            
-            # Check if user actually exists
-            try:
-                await client.get_user_info(input_text)
-            except discord.NotFound:
-                user_exists = False
-            except discord.HTTPException:
-                user_exists = False
+            if len(cmd_args) >= 1:
+                # Replacements are to support mentioned users
+                input_text = user_id_cleanup(remove_command(msg_content))
+                user_exists = True
+                
+                # Check if user actually exists
+                try:
+                    await client.fetch_user(input_text)
+                except discord.NotFound:
+                    user_exists = False
+                except discord.HTTPException:
+                    user_exists = False
 
-            if not input_text == message.author.id:
-                if not input_text in ult_operators and user_exists and not input_text == client.user.id:
-                    if not input_text in banned_users:
-                        load_ops_bans()
-                        banned_users.append(input_text)
-                        save_ops_bans()
-                        print()
-                        print("[Banned \"{}\"]".format(input_text))
-                        response = "Banned \"{}\".".format(input_text)
+                if not input_text == str(message.author.id):
+                    if user_exists:
+                        if not int(input_text) in ult_operators and not int(input_text) == client.user.id:
+                            if not int(input_text) in banned_users:
+                                load_ops_bans()
+                                banned_users.append(int(input_text))
+                                save_ops_bans()
+                                print()
+                                print("[Banned \"{}\"]".format(input_text))
+                                response = "Banned \"{}\".".format(input_text)
+                            else:
+                                response = "Unable to ban user \"{}\", they're already banned".format(input_text)
+                                result = 4
+                        else:
+                            response = "Unable to ban user \"{}\", you do not have permission to do so".format(input_text)
+                            result = 3
                     else:
-                        response = "Unable to ban user \"{}\", they're already banned".format(input_text)
-                        result = 4
+                        response = "Unable to ban user \"{}\", they don't exist".format(input_text)
+                        result = 6
                 else:
-                    response = "Unable to ban user \"{}\", either they don't exist or you don't have permission to do so".format(input_text)
-                    result = 6
+                    response = "Unable to ban user \"{}\", __that's yourself__...".format(input_text)
+                    result = 4
             else:
-                response = "Unable to ban user \"{}\", __that's yourself__...".format(input_text)
-                result = 4
+                result = 3
         else:
             result = 5
 
     elif matches_command(msg_content, "unban"):
         if user_perms["op"]:
-            # Replacements are to support mentioned users
-            input_text = user_id_cleanup(remove_command(msg_content))
-            user_exists = True
-            
-            # Check if user actually exists
-            try:
-                await client.get_user_info(input_text)
-            except discord.NotFound:
-                user_exists = False
-            except discord.HTTPException:
-                user_exists = False
+            if len(cmd_args) >= 1:
+                # Replacements are to support mentioned users
+                input_text = user_id_cleanup(remove_command(msg_content))
+                user_exists = True
+                
+                # Check if user actually exists
+                try:
+                    await client.fetch_user(input_text)
+                except discord.NotFound:
+                    user_exists = False
+                except discord.HTTPException:
+                    user_exists = False
 
-            if not input_text == message.author.id:
-                if not input_text in ult_operators and user_exists and not input_text == client.user.id:
-                    if input_text in banned_users:
-                        load_ops_bans()
-                        if input_text in banned_users:
-                            banned_users.remove(input_text)
-                        save_ops_bans()
-                        print()
-                        print("[Un-banned \"{}\"]".format(input_text))
-                        response = "Un-banned \"{}\".".format(input_text)
+                if not input_text == str(message.author.id):
+                    if user_exists:
+                        if not int(input_text) in ult_operators and not int(input_text) == client.user.id:
+                            if int(input_text) in banned_users:
+                                load_ops_bans()
+                                if int(input_text) in banned_users:
+                                    banned_users.remove(int(input_text))
+                                save_ops_bans()
+                                print()
+                                print("[Un-banned \"{}\"]".format(input_text))
+                                response = "Un-banned \"{}\".".format(input_text)
+                            else:
+                                response = "Unable to un-ban user \"{}\", they're not banned".format(input_text)
+                                result = 4
+                        else:
+                            response = "Unable to un-ban user \"{}\", you do not have permission to do so".format(input_text)
+                            result = 3
                     else:
-                        response = "Unable to un-ban user \"{}\", they're not banned".format(input_text)
-                        result = 4
+                        response = "Unable to un-ban user \"{}\", they don't exist".format(input_text)
+                        result = 6
                 else:
-                    response = "Unable to un-ban user \"{}\", either they don't exist or you don't have permission to do so".format(input_text)
-                    result = 6
+                    response = "Unable to un-ban user \"{}\", __that's yourself__...".format(input_text)
+                    result = 4
             else:
-                response = "Unable to un-ban user \"{}\", __that's yourself__...".format(input_text)
-                result = 4
+                result = 3
         else:
             result = 5
 
     elif matches_command(msg_content, "temperature"):
         if user_perms["op"] or user_perms["private"] or user_perms["server_admin"]:
-            input_text = remove_command(msg_content)
-            returned = change_settings('temperature', input_text)
-            print()
-            print(str(returned))
-            response = str(returned)
+            if len(cmd_args) >= 1:
+                input_text = cmd_args[0]
+                returned = change_settings('temperature', input_text)
+                print()
+                print(str(returned))
+                response = str(returned)
+            else:
+                result = 3
         else:
             result = 5
     
     elif matches_command(msg_content, "relevance"):
         if user_perms["op"] or user_perms["private"] or user_perms["server_admin"]:
-            input_text = remove_command(msg_content)
-            returned = change_settings('relevance', input_text)
-            print()
-            print(str(returned))
-            response = str(returned)
+            if len(cmd_args) >= 1:
+                input_text = cmd_args[0]
+                returned = change_settings('relevance', input_text)
+                print()
+                print(str(returned))
+                response = str(returned)
+            else:
+                result = 3
         else:
             result = 5
     
     elif matches_command(msg_content, "topn"):
         if user_perms["op"] or user_perms["private"] or user_perms["server_admin"]:
-            input_text = remove_command(msg_content)
-            returned = change_settings('topn', input_text)
-            print()
-            print(str(returned))
-            response = str(returned)
+            if len(cmd_args) >= 1:
+                input_text = cmd_args[0]
+                returned = change_settings('topn', input_text)
+                print()
+                print(str(returned))
+                response = str(returned)
+            else:
+                result = 3
         else:
             result = 5
 
     elif matches_command(msg_content, "beam_width"):
         if user_perms["op"] or user_perms["private"] or user_perms["server_admin"]:
-            input_text = remove_command(msg_content)
-            returned = change_settings('beam_width', input_text)
-            print()
-            print(str(returned))
-            response = str(returned)
+            if len(cmd_args) >= 1:
+                input_text = cmd_args[0]
+                returned = change_settings('beam_width', input_text)
+                print()
+                print(str(returned))
+                response = str(returned)
+            else:
+                result = 3
         else:
             result = 5
 
     else:
         result = 7
 
-    error_code_print = False
-    
-    if result == 0:
-        if response == "":
-            response = "Command successful"
-        
-        response = "System: " + response
-    elif result == 1:
-        if response == "":
-            response = "Invalid argument(s)"
-        
-        response = "Error: " + response
-    elif result == 2:
-        if response == "":
-            response = "Too many arguments"
-        
-        response = "Error: " + response
-    elif result == 3:
-        if response == "":
-            response = "Not enough arguments"
-        
-        response = "Error: " + response
-    elif result == 4:
-        if response == "":
-            response = "Generic error"
-            error_code_print = True
-        
-        response = "Error: " + response
-    elif result == 5:
-        if response == "":
-            response = "Insufficient permissions"
-        
-        response = "Error: " + response
-    elif result == 6:
-        if response == "":
-            response = "User not found"
-        
-        response = "Error: " + response
-    elif result == 7:
-        if response == "":
-            response = "Command not found"
-        
-        response = "Error: " + response
-
-    if error_code_print:
-        response += " (Error Code " + str(result) + ")"
-    
-    return response
+    return process_response(response, result)
 
 def has_channel_perms(message):
-    return message.server == None or message.channel.permissions_for(message.server.get_member(client.user.id)).send_messages;
-
-async def set_typing(message):
-    if has_channel_perms(message):
-        await client.send_typing(message.channel)
+    return message.guild == None or message.channel.permissions_for(message.guild.get_member(client.user.id)).send_messages;
 
 async def send_message(message, text):
-    if not text == "" and has_channel_perms(message):
+    if (mention_in_message or (not mention_in_message and not text == "")) and has_channel_perms(message):
+        user_mention = ""
+        
         if mention_in_message:
-            user_mention = "<@" + message.author.id + ">" + mention_message_separator
-        else:
-            user_mention = ""
-        await client.send_message(message.channel, user_mention + text)
+            user_mention = "<@" + str(message.author.id) + ">" + mention_message_separator
+        
+        await message.channel.send(user_mention + text)
 
 @client.event
 async def on_message(message):
     global lib_save_states, lib_load_states, lib_get_states, lib_get_current_states, lib_reset_states, change_settings, consumer, states_file, autosave
     
-    if (message.content.lower().startswith(message_prefix.lower()) or message.channel.is_private) and not message.author.bot and has_channel_perms(message):
+    if (message.content.lower().startswith(message_prefix.lower()) or isinstance(message.channel, discord.abc.PrivateChannel)) and not message.author.bot and has_channel_perms(message):
         msg_content = message.content
         
         if msg_content.startswith(message_prefix):
@@ -690,85 +744,86 @@ async def on_message(message):
         if msg_content.startswith(" "):
             msg_content = msg_content[len(" "):]
 
-        await set_typing(message)
+        response = "Error: Unknown error..."
 
-        user_perms = get_user_perms(message)
-        if user_perms["banned"] and not user_perms["private"]:
-            response = "Error: You have been banned and can only use this bot in DMs"
-            await send_message(message, response)
+        async with message.channel.typing():
+            user_perms = get_user_perms(message)
+            if user_perms["banned"] and not user_perms["private"]:
+                response = process_response("You have been banned and can only use this bot in DMs", 5)
 
-        elif msg_content.lower().startswith(command_prefix.lower()):
-            response = await process_command(msg_content, message)
-            await send_message(message, response)
+            elif msg_content.lower().startswith(command_prefix.lower()):
+                response = await process_command(msg_content, message)
 
-        else:
-            if not (message.author.id in processing_users):
-                if not msg_content == "":
-                    if not len(msg_content) > max_input_length:
-                        # Possibly problematic: if something goes wrong,
-                        # then the user couldn't send messages anymore
-                        processing_users.append(message.author.id)
-                        
-                        if autoload:
-                            states = load_states(get_states_id(message))
-                        else:
-                            states = lib_get_current_states()
-                        
-                        old_states = copy.deepcopy(states)
-                        
-                        clean_msg_content = message.clean_content
-
-                        if clean_msg_content.startswith(message_prefix):
-                            clean_msg_content = clean_msg_content[len(message_prefix):]
-                        if clean_msg_content.startswith(" "):
-                            clean_msg_content = clean_msg_content[len(" "):]
-                        
-                        print() # Print out new line for formatting
-                        print("> " + clean_msg_content) # Print out user message
-                        
-                        # Automatically prints out response as it's written
-                        result, states = await consumer(clean_msg_content, states=states, function=set_typing, function_args=message)
-
-                        # Purely debug
-                        # print(states[0][0][0]) Prints out the lowest level array
-                        # for state in states[0][0][0]: Prints out every entry in the lowest level array
-                        #     print(state)
-
-                        # Remove whitespace before the message
-                        while result.startswith(" "):
-                            result = result[1:]
-                        
-                        if not mention_in_message and result == "":
-                            result = "..."
-                        
-                        await send_message(message, result)
-                        
-                        print() # Move cursor to next line after response
-                        
-                        log("\n> " + msg_content + "\n" + result + "\n") # Log entire interaction
-                        if autosave and len(old_states) == len(states):
-                            # Get the difference in the states
-                            
-                            states_diff = []
-                            for num in range(len(states)):
-                                for num_two in range(len(states[num])):
-                                    for num_three in range(len(states[num][num_two])):
-                                        for num_four in range(len(states[num][num_two][num_three])):
-                                            states_diff.append(old_states[num][num_two][num_three][num_four] - states[num][num_two][num_three][num_four])
-                            
-                            add_states_to_queue(get_states_id(message), states_diff)
-                            write_state_queue()
-                            # save_states(get_states_id(message)) Old saving
-                        elif autosave and len(old_states) != len(states):
-                            # Revert to old saving to directly write new array dimensions
-                            save_states(get_states_id(message))
-
-                        processing_users.remove(message.author.id)
-                    else:
-                        await send_message(message, "Error: Your message is too long (" + str(len(msg_content)) + "/" + str(max_input_length) + " characters)")
-                else:
-                    await send_message(message, "Error: Your message is empty")
             else:
-                await send_message(message, "Error: Please wait for your response to be generated before sending more messages")
+                if not (message.author.id in processing_users):
+                    if not msg_content == "":
+                        if not len(msg_content) > max_input_length:
+                            # Possibly problematic: if something goes wrong,
+                            # then the user couldn't send messages anymore
+                            processing_users.append(message.author.id)
+                            
+                            if autoload:
+                                states = load_states(get_states_id(message))
+                            else:
+                                states = lib_get_current_states()
+                            
+                            old_states = copy.deepcopy(states)
+                            
+                            clean_msg_content = unidecode(message.clean_content)
+
+                            if clean_msg_content.startswith(message_prefix):
+                                clean_msg_content = clean_msg_content[len(message_prefix):]
+                            if clean_msg_content.startswith(" "):
+                                clean_msg_content = clean_msg_content[len(" "):]
+                            
+                            print() # Print out new line for formatting
+                            print("> " + clean_msg_content) # Print out user message
+                            
+                            # Automatically prints out response as it's written
+                            result, states = await consumer(clean_msg_content, states=states, function_args=message)
+
+                            # Purely debug
+                            # print(states[0][0][0]) Prints out the lowest level array
+                            # for state in states[0][0][0]: Prints out every entry in the lowest level array
+                            #     print(state)
+
+                            # Remove whitespace before the message
+                            while result.startswith(" "):
+                                result = result[1:]
+                            
+                            if not mention_in_message and result == "":
+                                result = "..."
+
+                            response = result
+                            
+                            print() # Move cursor to next line after response
+                            
+                            log("\n> " + msg_content + "\n" + result + "\n") # Log entire interaction
+                            if autosave and len(old_states) == len(states):
+                                # Get the difference in the states
+                                
+                                states_diff = []
+                                for num in range(len(states)):
+                                    for num_two in range(len(states[num])):
+                                        for num_three in range(len(states[num][num_two])):
+                                            for num_four in range(len(states[num][num_two][num_three])):
+                                                states_diff.append(old_states[num][num_two][num_three][num_four] - states[num][num_two][num_three][num_four])
+                                
+                                add_states_to_queue(get_states_id(message), states_diff)
+                                write_state_queue()
+                                # save_states(get_states_id(message)) Old saving
+                            elif autosave and len(old_states) != len(states):
+                                # Revert to old saving to directly write new array dimensions
+                                save_states(get_states_id(message))
+
+                            processing_users.remove(message.author.id)
+                        else:
+                            response = "Error: Your message is too long (" + str(len(msg_content)) + "/" + str(max_input_length) + " characters)"
+                    else:
+                        response = "Error: Your message is empty"
+                else:
+                    response = "Error: Please wait for your response to be generated before sending more messages"
+
+        await send_message(message, response)
 
 client.run("Token Goes Here", reconnect=True)

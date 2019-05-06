@@ -1,11 +1,13 @@
-import os
+import bz2
 import io
+import os
 import pickle
 import time
-import bz2
+
 import numpy as np
 
-class TextLoader():
+
+class TextLoader:
     # Call this class to load text from a file.
     def __init__(self, data_dir, batch_size, seq_length):
         # TextLoader remembers its initialization arguments.
@@ -28,14 +30,14 @@ class TextLoader():
             # If either the vocab file or the tensor file doesn't already exist, create them.
             t0 = time.time()
             print("Preprocessing the following files:")
-            for i, filename in enumerate(self.input_files): print("   {}.\t{}".format(i+1, filename))
+            for i, filename in enumerate(self.input_files): print("   {}.\t{}".format(i + 1, filename))
             print("Saving vocab file")
             self._save_vocab(vocab_file)
 
             for i, filename in enumerate(self.input_files):
                 t1 = time.time()
-                print("Preprocessing file {}/{} ({})... ".format(i+1, len(self.input_files), filename),
-                        end='', flush=True)
+                print("Preprocessing file {}/{} ({})... ".format(i + 1, len(self.input_files), filename),
+                      end='', flush=True)
                 self._preprocess(self.input_files[i], self.tensor_file_template.format(i))
                 self.tensor_sizes.append(self.tensor.size)
                 print("done ({:.1f} seconds)".format(time.time() - t1), flush=True)
@@ -44,7 +46,7 @@ class TextLoader():
                 pickle.dump(self.tensor_sizes, f)
 
             print("Processed input data: {:,d} characters loaded ({:.1f} seconds)".format(
-                    self.tensor.size, time.time() - t0))
+                self.tensor.size, time.time() - t0))
         else:
             # If the vocab file and sizes file already exist, load them.
             print("Loading vocab file...")
@@ -81,7 +83,8 @@ class TextLoader():
                     file_path = os.path.join(walk_root, file_name)
                     if file_path.endswith(suffixes[0]) or file_path.endswith(suffixes[1]):
                         input_file_list.append(file_path)
-        else: raise ValueError("Not a directory: {}".format(data_dir))
+        else:
+            raise ValueError("Not a directory: {}".format(data_dir))
         return sorted(input_file_list)
 
     def _save_vocab(self, vocab_file):
@@ -102,8 +105,10 @@ class TextLoader():
         self.vocab = dict(zip(self.chars, range(len(self.chars))))
 
     def _preprocess(self, input_file, tensor_file):
-        if input_file.endswith(".bz2"): file_reference = bz2.open(input_file, mode='rt')
-        elif input_file.endswith(".txt"): file_reference = io.open(input_file, mode='rt', encoding='utf-8')
+        if input_file.endswith(".bz2"):
+            file_reference = bz2.open(input_file, mode='rt')
+        elif input_file.endswith(".txt"):
+            file_reference = io.open(input_file, mode='rt', encoding='utf-8')
         data = file_reference.read()
         file_reference.close()
         # Convert the entirety of the data file from characters to indices via the vocab dictionary.
@@ -112,7 +117,7 @@ class TextLoader():
         # [14, 2, 9, 2, 0, 6, 7, 0, ...]
         # np.array converts the list into a numpy array.
         self.tensor = np.array(list(map(self.vocab.get, data)))
-        self.tensor = self.tensor[self.tensor != np.array(None)].astype(int) # Filter out None
+        self.tensor = self.tensor[self.tensor != np.array(None)].astype(int)  # Filter out None
         # Compress and save the numpy tensor array to data.npz.
         np.savez_compressed(tensor_file, tensor_data=self.tensor)
 
@@ -131,7 +136,7 @@ class TextLoader():
         self.num_batches = self.tensor.size // (self.batch_size * self.seq_length)
         if self.tensor_batch_counts[tensor_index] != self.num_batches:
             print("Error in batch size! Expected {:,d}; found {:,d}".format(self.tensor_batch_counts[tensor_index],
-                    self.num_batches))
+                                                                            self.num_batches))
         # Chop off the end of the data tensor so that the length of the data is a whole
         # multiple of the (batch_size x seq_length) product.
         # Do this with the slice operator on the numpy array.
@@ -144,8 +149,8 @@ class TextLoader():
         # Since this is a sequence prediction net, the target is just the input right-shifted
         # by 1.
         xdata = self.tensor
-        ydata = np.copy(self.tensor) # Y-data starts as a copy of x-data.
-        ydata[:-1] = xdata[1:] # Right-shift y-data by 1 using the numpy array slice syntax.
+        ydata = np.copy(self.tensor)  # Y-data starts as a copy of x-data.
+        ydata[:-1] = xdata[1:]  # Right-shift y-data by 1 using the numpy array slice syntax.
         # Replace the very last character of y-data with the first character of the input data.
         ydata[-1] = xdata[0]
         # Split our unidemnsional data array into distinct batches.

@@ -1,13 +1,12 @@
+import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops import rnn_cell
-from tensorflow.python.ops import nn_ops
-from tensorflow.python.ops import variable_scope as vs
-from tensorflow.python.framework import ops
 from tensorflow.contrib import rnn
-
+from tensorflow.python.framework import ops
+from tensorflow.python.ops import nn_ops
+from tensorflow.python.ops import rnn_cell
+from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.util.nest import flatten
 
-import numpy as np
 
 class PartitionedMultiRNNCell(rnn_cell.RNNCell):
     """RNN cell composed sequentially of multiple simple cells."""
@@ -30,7 +29,6 @@ class PartitionedMultiRNNCell(rnn_cell.RNNCell):
     # -------------------
     #  \\\\\\\\ ////////
     #        input
-
 
     def __init__(self, cell_fn, partition_size=128, partitions=1, layers=2):
         """Create a RNN cell composed sequentially of a number of RNNCells.
@@ -72,7 +70,7 @@ class PartitionedMultiRNNCell(rnn_cell.RNNCell):
             if l > 0:
                 offset_width = layer[0].output_size // 2
                 layer_input = tf.concat((layer_input[:, -offset_width:], layer_input[:, :-offset_width]),
-                    axis=1, name='concat_offset_%d' % l)
+                                        axis=1, name='concat_offset_%d' % l)
             # Create a tuple of inputs by splitting the lower layer output into partitions.
             p_inputs = tf.split(layer_input, len(layer), axis=1, name='split_%d' % l)
             p_outputs = []
@@ -88,6 +86,7 @@ class PartitionedMultiRNNCell(rnn_cell.RNNCell):
             layer_input = tf.concat(p_outputs, axis=1, name='concat_%d' % l)
         new_states = tuple(new_states)
         return layer_input, new_states
+
 
 def _rnn_state_placeholders(state):
     """Convert RNN state tensors to placeholders, reflecting the same nested tuple structure."""
@@ -106,8 +105,9 @@ def _rnn_state_placeholders(state):
         structure = [_rnn_state_placeholders(x) for x in state]
         return tuple(structure)
 
-class Model():
-    def __init__(self, args, infer=False): # infer is set to true during sampling.
+
+class Model:
+    def __init__(self, args, infer=False):  # infer is set to true during sampling.
         self.args = args
         if infer:
             # Worry about one character at a time during sampling; no batching or BPTT.
@@ -138,7 +138,7 @@ class Model():
         # cell = rnn_cell.MultiRNNCell([cell_fn(args.block_size) for _ in range(args.num_layers)])
         # cell = MyMultiRNNCell([cell_fn(args.block_size) for _ in range(args.num_layers)])
         cell = PartitionedMultiRNNCell(cell_fn, partitions=args.num_blocks,
-            partition_size=args.block_size, layers=args.num_layers)
+                                       partition_size=args.block_size, layers=args.num_layers)
 
         # Create a TF placeholder node of 32-bit ints (NOT floats!),
         # of shape batch_size x seq_length. This shape matches the batches
@@ -172,7 +172,7 @@ class Model():
         # TODO: Check arguments parallel_iterations (default uses more memory and less time) and
         # swap_memory (default uses more memory but "minimal (or no) performance penalty")
         outputs, self.final_state = tf.nn.dynamic_rnn(cell, inputs,
-                initial_state=self.initial_state, scope='rnnlm')
+                                                      initial_state=self.initial_state, scope='rnnlm')
         # outputs has shape [batch_size, max_time, cell.output_size] because time_major == false.
         # Do we need to transpose the first two dimensions? (Answer: no, this ruins everything.)
         # outputs = tf.transpose(outputs, perm=[1, 0, 2])
@@ -221,16 +221,16 @@ class Model():
             # Create a tensorboard summary of our cost.
             tf.summary.scalar("cost", self.cost)
 
-            tvars = tf.trainable_variables() # tvars is a python list of all trainable TF Variable objects.
+            tvars = tf.trainable_variables()  # tvars is a python list of all trainable TF Variable objects.
             # tf.gradients returns a list of tensors of length len(tvars) where each tensor is sum(dy/dx).
             grads, _ = tf.clip_by_global_norm(tf.gradients(self.cost, tvars),
-                     args.grad_clip)
-            optimizer = tf.train.AdamOptimizer(self.lr) # Use ADAM optimizer.
+                                              args.grad_clip)
+            optimizer = tf.train.AdamOptimizer(self.lr)  # Use ADAM optimizer.
             # Zip creates a list of tuples, where each tuple is (variable tensor, gradient tensor).
             # Training op nudges the variables along the gradient, with the given learning rate, using the ADAM optimizer.
             # This is the op that a training session should be instructed to perform.
             self.train_op = optimizer.apply_gradients(zip(grads, tvars))
-            #self.train_op = optimizer.minimize(self.cost)
+            # self.train_op = optimizer.minimize(self.cost)
             self.summary_op = tf.summary.merge_all()
 
     def add_state_to_feed_dict(self, feed_dict, state):
